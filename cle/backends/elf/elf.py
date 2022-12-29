@@ -32,6 +32,7 @@ from ...patched_stream import PatchedStream
 from ...errors import CLEError, CLEInvalidBinaryError, CLECompatibilityError
 from ...utils import ALIGN_DOWN, ALIGN_UP, get_mmaped_data, stream_or_path
 from ...address_translator import AT
+from .callframe import FDE
 
 l = logging.getLogger(name=__name__)
 
@@ -143,6 +144,7 @@ class ELF(MetaELF):
         self.addr_to_line = SortedDict()
         self.variables: Optional[List[Variable]] = None
         self.compilation_units: Optional[List[CompilationUnit]] = None
+        self.fde_hints: Optional[List[FDE]] = None
 
         # misc
         self._entry = self._reader.header.e_entry
@@ -190,6 +192,7 @@ class ELF(MetaELF):
                     self._load_function_hints_from_fde(dwarf, FunctionHintSource.EH_FRAME)
                     self._load_exception_handling(dwarf)
                     self._load_line_info(dwarf)
+                    self._load_fde_hints(dwarf)
 
         if debug_symbols:
             self.__process_debug_file(debug_symbols)
@@ -626,6 +629,28 @@ class ELF(MetaELF):
 
                 relocated_addr = AT.from_lva(line.state.address, self).to_mva()
                 self.addr_to_line[relocated_addr] = (filename, line.state.line)
+
+    def _load_fde_hints(self, dwarf):
+        """
+            load fde hints to compute cfa from dwarf call frame
+        """
+        fde_hints = []
+        try:
+            for entry in dwarf.EH_CFI_entries():
+                if type(entry) is callframe.FDE:
+                    if self.arch.name == 'AMD64':
+                        arch = 'x64'
+                    elif self.arch.name == 'X86':
+                        arch = 'x86'
+                    elif self.arch.name == 'AARCH64':
+                        arch = 'AArch64'
+                    else:
+                        break
+                    fde_hints.append(FDE.load_fde(entry, arch))
+        except (DWARFError, ValueError):
+            l.warning("An exception occurred in pyelftools when loading FDE information.",
+                      exc_info=True)
+        self.fde_hints = fde_hints
 
     @staticmethod
     def _load_low_high_pc_form_die(die: DIE):
