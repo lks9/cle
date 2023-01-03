@@ -10,7 +10,7 @@ from elftools.elf import elffile, sections, dynamic, enums
 from elftools.dwarf import callframe
 from elftools.common.exceptions import ELFError, DWARFError, ELFParseError
 from elftools.dwarf.dwarf_expr import DWARFExprParser
-from elftools.dwarf.descriptions import describe_form_class, describe_attr_value
+from elftools.dwarf.descriptions import describe_form_class, describe_attr_value, set_global_machine_arch
 from elftools.dwarf.dwarfinfo import DWARFInfo
 from elftools.dwarf.die import DIE
 
@@ -409,6 +409,16 @@ class ELF(MetaELF):
 
         self.addr_to_line = {addr + delta: value for addr, value in self.addr_to_line.items()}
 
+    def cfa_rule(self, pc_addr):
+        wanted_fde = None
+        for fde in self.fde_hints:
+            if fde.low_pc + self.mapped_base <= pc_addr < fde.high_pc + self.mapped_base:
+                wanted_fde = fde
+                break
+        if wanted_fde is None:
+            return None
+        return wanted_fde.cfa_rule(pc_addr, self.mapped_base)
+
     #
     # Private Methods
     #
@@ -635,18 +645,18 @@ class ELF(MetaELF):
             load fde hints to compute cfa from dwarf call frame
         """
         fde_hints = []
+        if self.arch.name == 'AMD64':
+            set_global_machine_arch('x64')
+        elif self.arch.name == 'X86':
+            set_global_machine_arch('x86')
+        elif self.arch.name == 'AARCH64':
+            set_global_machine_arch('AArch64')
+        else:
+            pass
         try:
             for entry in dwarf.EH_CFI_entries():
                 if type(entry) is callframe.FDE:
-                    if self.arch.name == 'AMD64':
-                        arch = 'x64'
-                    elif self.arch.name == 'X86':
-                        arch = 'x86'
-                    elif self.arch.name == 'AARCH64':
-                        arch = 'AArch64'
-                    else:
-                        break
-                    fde_hints.append(FDE.load_fde(entry, arch))
+                    fde_hints.append(FDE.load_fde(entry))
         except (DWARFError, ValueError):
             l.warning("An exception occurred in pyelftools when loading FDE information.",
                       exc_info=True)
